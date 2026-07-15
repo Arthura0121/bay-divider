@@ -2,7 +2,7 @@ import { firebaseConfig, ADMIN_PIN } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc,
-  collection, addDoc, query, where, orderBy, onSnapshot,
+  collection, addDoc, query, where, orderBy, onSnapshot, getDocs,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // ---------------- constants ----------------
@@ -62,10 +62,37 @@ function todayStartMs() {
   return start.getTime();
 }
 
+// Query boundary — deliberately earlier than the 10am shift start, so a
+// guard who checks in early (to set up before opening) isn't silently
+// excluded from the live data. The 10am boundary above is only used for
+// "hours from shift start" math, not for what counts as "today".
+function todayMidnightMs() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+function todayDateStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function dateStrLabel(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+// Local-midnight-to-local-midnight range in ms for a given "YYYY-MM-DD" string.
+function dateStrToRange(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  const end = new Date(y, m - 1, d + 1, 0, 0, 0, 0).getTime();
+  return { start, end };
 }
 
 // ---------------- local device state ----------------
@@ -95,6 +122,7 @@ function signOutRole() {
 let bays = {}; // { [bayId]: { open, positions: { chair1: {on,hours}, ... } } }
 let events = []; // today's events, ascending by time: { guard, bay, at }
 let dataReady = false;
+const loadedBays = new Set();
 
 async function seedBaysIfNeeded() {
   for (const id of BAY_IDS) {
@@ -116,23 +144,43 @@ function listenBays() {
     onSnapshot(ref, (snap) => {
       if (snap.exists()) {
         bays[id] = snap.data();
-        dataReady = true;
+        loadedBays.add(id);
+        if (loadedBays.size === BAY_IDS.length) dataReady = true;
         render();
       }
     });
   });
 }
 
+let activeDayStr = todayDateStr();
+let unsubscribeEvents = null;
+
 function listenEvents() {
+  if (unsubscribeEvents) unsubscribeEvents();
   const q = query(
     collection(db, "events"),
-    where("at", ">=", todayStartMs()),
+    where("at", ">=", todayMidnightMs()),
     orderBy("at", "asc")
   );
-  onSnapshot(q, (snap) => {
+  unsubscribeEvents = onSnapshot(q, (snap) => {
     events = snap.docs.map((d) => d.data());
     render();
   });
+}
+
+// The Firestore query above bakes in "today's" midnight boundary at the
+// moment it's created — it does NOT update itself as time passes. If the
+// admin leaves the tab open overnight, without this check it would keep
+// showing yesterday's data forever. This runs periodically and
+// re-subscribes with a fresh boundary the moment the date actually rolls
+// over, so the live view genuinely clears itself at midnight.
+function checkDayRollover() {
+  const nowStr = todayDateStr();
+  if (nowStr !== activeDayStr) {
+    activeDayStr = nowStr;
+    listenEvents();
+    render();
+  }
 }
 
 async function checkIn(bayId) {
@@ -198,8 +246,7 @@ function buildTimelines() {
 }
 
 function currentHeadcount(bayIntervals, bayId) {
-  const now = Date.now();
-  return bayIntervals[bayId].filter((iv) => iv.ongoing || iv.end >= now - 1000).length;
+  return bayIntervals[bayId].filter((iv) => iv.ongoing).length;
 }
 
 function guardsInBay(currentStatus, bayId) {
@@ -213,7 +260,7 @@ function guardsInBay(currentStatus, bayId) {
 function remainingSplit(bay, headcount) {
   const now = Date.now();
   const dayStart = todayStartMs();
-  const hoursNow = Math.min(DAY_HOURS, (now - dayStart) / 3600000);
+  const hoursNow = Math.max(0, Math.min(DAY_HOURS, (now - dayStart) / 3600000));
 
   const onPositions = POSITION_DEFS.filter((p) => bay.positions[p.id]?.on);
   let remainingMin = 0;
@@ -239,7 +286,85 @@ function remainingSplit(bay, headcount) {
   return { remainingMin, breakdown, shortage, activeStandsNow, hoursNow };
 }
 
-// ---------------- rendering ----------------
+// ---------------- history (past days) ----------------
+async function fetchDayEvents(dateStr) {
+  const { start, end } = dateStrToRange(dateStr);
+  const q = query(
+    collection(db, "events"),
+    where("at", ">=", start),
+    where("at", "<", end),
+    orderBy("at", "asc")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data());
+}
+
+// Builds per-bay durations, per-guard totals, and a plain-English
+// chronological log for an arbitrary day's events. endCapMs is what an
+// unfinished ("forgot to check out") stretch is measured against — now,
+// if it's today, otherwise that day's midnight.
+function buildDayReport(dayEvents, endCapMs) {
+  const byGuard = {};
+  dayEvents.forEach((e) => {
+    if (!byGuard[e.guard]) byGuard[e.guard] = [];
+    byGuard[e.guard].push(e);
+  });
+
+  const bayIntervals = {};
+  BAY_IDS.forEach((id) => (bayIntervals[id] = []));
+  const guardTotals = {};
+
+  Object.entries(byGuard).forEach(([guard, evs]) => {
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      if (e.bay !== null) {
+        const start = e.at;
+        const end = evs[i + 1] ? evs[i + 1].at : endCapMs;
+        if (end > start) {
+          bayIntervals[e.bay].push({ guard, start, end });
+          guardTotals[guard] = (guardTotals[guard] || 0) + (end - start);
+        }
+      }
+    }
+  });
+
+  const lastBay = {};
+  const log = dayEvents.map((e) => {
+    const prev = lastBay[e.guard];
+    let action;
+    if (e.bay === null) {
+      action = prev !== undefined && prev !== null ? `checked out (was Bay ${prev})` : "checked out";
+    } else if (prev === undefined || prev === null) {
+      action = `checked into Bay ${e.bay}`;
+    } else if (prev === e.bay) {
+      action = `checked into Bay ${e.bay}`;
+    } else {
+      action = `moved from Bay ${prev} to Bay ${e.bay}`;
+    }
+    lastBay[e.guard] = e.bay;
+    return { guard: e.guard, at: e.at, action };
+  });
+
+  return { bayIntervals, guardTotals, log };
+}
+
+// ---------------- history UI state ----------------
+let adminTab = "live"; // "live" | "history"
+let historyDate = todayDateStr();
+let historyLoading = false;
+let historyReport = null;
+
+async function loadHistory(dateStr) {
+  historyDate = dateStr;
+  historyLoading = true;
+  historyReport = null;
+  render();
+  const dayEvents = await fetchDayEvents(dateStr);
+  const endCap = dateStr === todayDateStr() ? Date.now() : dateStrToRange(dateStr).end;
+  historyReport = buildDayReport(dayEvents, endCap);
+  historyLoading = false;
+  render();
+}
 const root = document.getElementById("root");
 
 function render() {
@@ -277,14 +402,23 @@ function renderRoleGate() {
 }
 
 function overviewHtml() {
-  const { bayIntervals } = buildTimelines();
+  const { bayIntervals, currentStatus } = buildTimelines();
   return BAY_IDS.map((id) => {
     const bay = bays[id];
     const count = currentHeadcount(bayIntervals, id);
+    const roster = bay.open ? guardsInBay(currentStatus, id) : [];
     return `
       <div class="mini-bay ${bay.open ? "" : "closed"}">
-        <span class="mini-bay-name">Bay ${id}</span>
-        <span class="mini-bay-status">${bay.open ? `${count} on it` : "Closed"}</span>
+        <div class="mini-bay-head">
+          <span class="mini-bay-name">Bay ${id}</span>
+          <span class="mini-bay-status">${bay.open ? `${count} on it` : "Closed"}</span>
+        </div>
+        ${bay.open && roster.length ? `
+          <div class="mini-bay-roster">
+            ${roster.map((g) => `<span class="roster-chip">${escapeHtml(g.guard)}</span>`).join("")}
+          </div>
+        ` : ""}
+        ${bay.open && !roster.length ? `<div class="mini-bay-empty">No one here yet</div>` : ""}
       </div>
     `;
   }).join("");
@@ -435,6 +569,35 @@ function renderLifeguard() {
 }
 
 function renderAdmin() {
+  root.innerHTML = `
+    <div class="header">
+      <div class="header-badge">🛟</div>
+      <div>
+        <div class="header-title">Admin Dashboard</div>
+        <div class="header-sub">10:00 AM – 6:00 PM</div>
+      </div>
+    </div>
+    <div class="tab-row">
+      <button class="tab-btn ${adminTab === "live" ? "active" : ""}" id="tabLive">Live</button>
+      <button class="tab-btn ${adminTab === "history" ? "active" : ""}" id="tabHistory">History</button>
+    </div>
+    <div id="adminContent"></div>
+    <button class="link-btn" id="backBtn">← sign out of admin</button>
+  `;
+  document.getElementById("tabLive").onclick = () => { adminTab = "live"; render(); };
+  document.getElementById("tabHistory").onclick = () => {
+    adminTab = "history";
+    if (!historyReport && !historyLoading) loadHistory(historyDate);
+    render();
+  };
+  document.getElementById("backBtn").onclick = signOutRole;
+
+  if (adminTab === "live") renderAdminLive();
+  else renderAdminHistory();
+}
+
+function renderAdminLive() {
+  const el = document.getElementById("adminContent");
   const { bayIntervals, currentStatus } = buildTimelines();
 
   const bayCards = BAY_IDS.map((id) => {
@@ -494,40 +657,114 @@ function renderAdmin() {
     `;
   }).join("");
 
-  root.innerHTML = `
-    <div class="header">
-      <div class="header-badge">🛟</div>
-      <div>
-        <div class="header-title">Admin Dashboard</div>
-        <div class="header-sub">10:00 AM – 6:00 PM</div>
-      </div>
-    </div>
-    <div id="adminBays">${bayCards}</div>
-    <button class="link-btn" id="backBtn">← sign out of admin</button>
-  `;
+  el.innerHTML = `<div id="adminBays">${bayCards}</div>`;
 
-  root.querySelectorAll("[data-toggle-bay]").forEach((btn) => {
+  el.querySelectorAll("[data-toggle-bay]").forEach((btn) => {
     btn.onclick = () => toggleBayOpen(parseInt(btn.dataset.toggleBay, 10));
   });
-  root.querySelectorAll("[data-toggle-pos]").forEach((btn) => {
+  el.querySelectorAll("[data-toggle-pos]").forEach((btn) => {
     btn.onclick = () => {
       const [bayId, posId] = btn.dataset.togglePos.split("|");
       togglePositionOn(parseInt(bayId, 10), posId);
     };
   });
-  root.querySelectorAll("[data-set-hours]").forEach((sel) => {
+  el.querySelectorAll("[data-set-hours]").forEach((sel) => {
     sel.onchange = () => {
       const [bayId, posId] = sel.dataset.setHours.split("|");
       setPositionHours(parseInt(bayId, 10), posId, sel.value);
     };
   });
-  root.querySelectorAll("[data-move-guard]").forEach((sel) => {
+  el.querySelectorAll("[data-move-guard]").forEach((sel) => {
     sel.onchange = () => {
       if (sel.value) adminMoveGuard(sel.dataset.moveGuard, parseInt(sel.value, 10));
       sel.value = "";
     };
   });
-  document.getElementById("backBtn").onclick = signOutRole;
+}
+
+function renderAdminHistory() {
+  const el = document.getElementById("adminContent");
+  const quickDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+
+  let bodyHtml;
+  if (historyLoading) {
+    bodyHtml = `<div class="loading" style="padding:30px 0;">Loading ${dateStrLabel(historyDate)}…</div>`;
+  } else if (!historyReport) {
+    bodyHtml = "";
+  } else {
+    const r = historyReport;
+    const bayBlocks = BAY_IDS.map((id) => {
+      const intervals = r.bayIntervals[id];
+      if (!intervals.length) return "";
+      return `
+        <div class="history-bay">
+          <div class="history-bay-title">Bay ${id}</div>
+          ${intervals.map((iv) => `
+            <div class="roster-row">
+              <span>${escapeHtml(iv.guard)}</span>
+              <span class="roster-time">${fmtHours((iv.end - iv.start) / 3600000)}</span>
+              <span class="history-time-range">${clockTimeLabel(iv.start)} – ${clockTimeLabel(iv.end)}</span>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }).join("");
+
+    const totalsBlock = Object.entries(r.guardTotals)
+      .sort((a, b) => b[1] - a[1])
+      .map(([guard, ms]) => `
+        <div class="roster-row">
+          <span>${escapeHtml(guard)}</span>
+          <span class="roster-time">${fmtHours(ms / 3600000)}</span>
+        </div>
+      `).join("");
+
+    const logBlock = r.log.length
+      ? r.log.map((e) => `
+          <div class="log-row">
+            <span class="log-time">${clockTimeLabel(e.at)}</span>
+            <span><b>${escapeHtml(e.guard)}</b> ${e.action}</span>
+          </div>
+        `).join("")
+      : `<div class="empty-msg none-needed">No activity this day</div>`;
+
+    bodyHtml = `
+      <div class="section">
+        <div class="section-label">👥 Who worked where</div>
+        ${bayBlocks || `<div class="empty-msg none-needed">No one checked in this day</div>`}
+      </div>
+      <div class="section">
+        <div class="section-label">⏱️ Totals for the day</div>
+        ${totalsBlock || `<div class="empty-msg none-needed">Nothing to total</div>`}
+      </div>
+      <div class="section">
+        <div class="section-label">📋 Full activity log</div>
+        <div class="log-list">${logBlock}</div>
+      </div>
+    `;
+  }
+
+  el.innerHTML = `
+    <div class="section">
+      <div class="section-label">📅 Pick a day</div>
+      <input type="date" id="historyDateInput" value="${historyDate}" max="${todayDateStr()}" />
+      <div class="quick-days">
+        ${quickDays.map((d) => `<button class="quick-day-btn ${d === historyDate ? "active" : ""}" data-day="${d}">${dateStrLabel(d)}</button>`).join("")}
+      </div>
+    </div>
+    ${bodyHtml}
+  `;
+
+  document.getElementById("historyDateInput").onchange = (e) => {
+    if (e.target.value) loadHistory(e.target.value);
+  };
+  el.querySelectorAll("[data-day]").forEach((btn) => {
+    btn.onclick = () => loadHistory(btn.dataset.day);
+  });
 }
 
 // ---------------- boot ----------------
@@ -536,4 +773,5 @@ function renderAdmin() {
   listenBays();
   listenEvents();
   setInterval(render, 30000); // keep elapsed-time displays fresh
+  setInterval(checkDayRollover, 30000); // auto-reset the live view at midnight
 })();
