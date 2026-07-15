@@ -4,12 +4,13 @@
 // "Your apps" → Web app → SDK setup and configuration → Config
 // ------------------------------------------------------------------
 export const firebaseConfig = {
-  apiKey: "PASTE_YOUR_API_KEY",
-  authDomain: "PASTE_YOUR_PROJECT.firebaseapp.com",
-  projectId: "PASTE_YOUR_PROJECT_ID",
-  storageBucket: "PASTE_YOUR_PROJECT.appspot.com",
-  messagingSenderId: "PASTE_YOUR_SENDER_ID",
-  appId: "PASTE_YOUR_APP_ID",
+  apiKey: "AIzaSyAIOwOJGzaHaYha3hRNli663fRaJnGEOHQ",
+  authDomain: "bay-divider.firebaseapp.com",
+  projectId: "bay-divider",
+  storageBucket: "bay-divider.firebasestorage.app",
+  messagingSenderId: "311134040393",
+  appId: "1:311134040393:web:0cdff3ed248149b070aa98",
+  measurementId: "G-424EGQ3J4V"
 };
 
 // Change this to whatever PIN your admin should use.
