@@ -100,6 +100,15 @@ let myRole = localStorage.getItem("bay_myRole") || null; // "lifeguard" | "admin
 let myName = localStorage.getItem("bay_myName") || "";
 let adminUnlocked = sessionStorage.getItem("bay_adminUnlocked") === "1";
 
+// notifications + chat (UI state; the panels/FAB live outside the main
+// render() cycle so they aren't wiped out by every re-render)
+let notifications = []; // { id, text, type, at }
+let unreadNotif = 0;
+let notifOpen = false;
+let chatMessages = [];
+let unreadChat = 0;
+let chatOpen = false;
+
 function setRole(role) {
   myRole = role;
   localStorage.setItem("bay_myRole", role);
@@ -108,6 +117,7 @@ function setRole(role) {
 function setMyName(name) {
   myName = name;
   localStorage.setItem("bay_myName", name);
+  requestNotifPermission();
   render();
 }
 function signOutRole() {
@@ -116,6 +126,22 @@ function signOutRole() {
   sessionStorage.removeItem("bay_adminUnlocked");
   localStorage.removeItem("bay_myRole");
   render();
+}
+
+function requestNotifPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+// OS-level notification — only useful while this tab/browser is still
+// running (in the background is fine, fully closed is not, since there's
+// no push server behind this). Only fires when the tab isn't in front, so
+// it doesn't double up with the in-app toast someone's already looking at.
+function osNotify(title, body) {
+  if ("Notification" in window && Notification.permission === "granted" && document.visibilityState !== "visible") {
+    try { new Notification(title, { body }); } catch (e) { /* ignore */ }
+  }
 }
 
 // ---------------- live data ----------------
@@ -141,9 +167,26 @@ async function seedBaysIfNeeded() {
 function listenBays() {
   BAY_IDS.forEach((id) => {
     const ref = doc(db, "bays", String(id));
+    let prev = null;
+    let first = true;
     onSnapshot(ref, (snap) => {
       if (snap.exists()) {
-        bays[id] = snap.data();
+        const data = snap.data();
+        if (!first && prev) {
+          if (prev.open !== data.open) {
+            pushNotification(`Bay ${id} ${data.open ? "opened" : "closed"}`, data.open ? "info" : "warning");
+          }
+          POSITION_DEFS.forEach((p) => {
+            const wasOn = prev.positions[p.id]?.on;
+            const isOn = data.positions[p.id]?.on;
+            if (wasOn !== isOn) {
+              pushNotification(`${p.name} at Bay ${id} turned ${isOn ? "on" : "off"}`, isOn ? "info" : "warning");
+            }
+          });
+        }
+        prev = data;
+        first = false;
+        bays[id] = data;
         loadedBays.add(id);
         if (loadedBays.size === BAY_IDS.length) dataReady = true;
         render();
@@ -162,8 +205,34 @@ function listenEvents() {
     where("at", ">=", todayMidnightMs()),
     orderBy("at", "asc")
   );
+  let first = true;
+  const lastKnownBay = {};
   unsubscribeEvents = onSnapshot(q, (snap) => {
     events = snap.docs.map((d) => d.data());
+    if (first) {
+      // seed silently — these are pre-existing events from earlier today,
+      // not new activity, so they shouldn't fire notifications
+      events.forEach((e) => { lastKnownBay[e.guard] = e.bay; });
+    } else {
+      snap.docChanges().forEach((change) => {
+        if (change.type !== "added") return;
+        const e = change.doc.data();
+        const prevBay = lastKnownBay[e.guard];
+        let msg;
+        if (e.bay === null) {
+          msg = prevBay ? `${e.guard} checked out of Bay ${prevBay}` : `${e.guard} checked out`;
+        } else if (prevBay === undefined || prevBay === null) {
+          msg = `${e.guard} checked into Bay ${e.bay}`;
+        } else if (prevBay === e.bay) {
+          msg = null; // redundant same-bay tap — nothing actually changed
+        } else {
+          msg = `${e.guard} moved from Bay ${prevBay} to Bay ${e.bay}`;
+        }
+        lastKnownBay[e.guard] = e.bay;
+        if (msg) pushNotification(msg, "info");
+      });
+    }
+    first = false;
     render();
   });
 }
@@ -179,6 +248,9 @@ function checkDayRollover() {
   if (nowStr !== activeDayStr) {
     activeDayStr = nowStr;
     listenEvents();
+    listenChat();
+    priorShortage = {};
+    notifiedLongShift.clear();
     render();
   }
 }
@@ -286,6 +358,204 @@ function remainingSplit(bay, headcount) {
   return { remainingMin, breakdown, shortage, activeStandsNow, hoursNow };
 }
 
+// ---------------- notifications ----------------
+function pushNotification(text, type = "info") {
+  const entry = { id: `${Date.now()}_${Math.random()}`, text, type, at: Date.now() };
+  notifications.unshift(entry);
+  if (notifications.length > 60) notifications.length = 60;
+  unreadNotif++;
+  renderNotifBadge();
+  if (notifOpen) renderNotifList();
+  showToast(text, type);
+  osNotify("Bay Board", text);
+  updateFabVisibility();
+}
+
+function showToast(text, type) {
+  const holder = document.getElementById("toastRoot");
+  if (!holder) return;
+  const el = document.createElement("div");
+  el.className = `toast toast-${type}`;
+  el.textContent = text;
+  holder.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.remove(), 300);
+  }, 4500);
+}
+
+function showChatPopout(sender, text) {
+  const holder = document.getElementById("chatPopoutRoot");
+  if (!holder) return;
+  const el = document.createElement("div");
+  el.className = "chat-popout";
+  el.innerHTML = `<div class="chat-popout-sender">💬 ${escapeHtml(sender)}</div><div class="chat-popout-text">${escapeHtml(text)}</div>`;
+  el.onclick = () => { openChat(); el.remove(); };
+  holder.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.remove(), 300);
+  }, 6000);
+}
+
+function renderNotifBadge() {
+  const badge = document.getElementById("notifBadge");
+  if (!badge) return;
+  if (unreadNotif > 0) { badge.style.display = "flex"; badge.textContent = unreadNotif > 9 ? "9+" : unreadNotif; }
+  else badge.style.display = "none";
+}
+
+function renderNotifList() {
+  const list = document.getElementById("notifList");
+  if (!list) return;
+  list.innerHTML = notifications.length
+    ? notifications.map((n) => `
+        <div class="notif-row ${n.type === "warning" ? "notif-warning" : ""}">
+          <span class="notif-time">${clockTimeLabel(n.at)}</span>
+          <span>${escapeHtml(n.text)}</span>
+        </div>
+      `).join("")
+    : `<div class="empty-msg none-needed" style="padding:20px 0;">No notifications yet</div>`;
+}
+
+function openNotif() {
+  notifOpen = true;
+  unreadNotif = 0;
+  renderNotifBadge();
+  renderNotifList();
+  document.getElementById("notifPanel").style.display = "flex";
+  closeChat();
+}
+function closeNotif() {
+  notifOpen = false;
+  document.getElementById("notifPanel").style.display = "none";
+}
+
+// ---------------- chat ----------------
+let unsubscribeChat = null;
+
+function listenChat() {
+  if (unsubscribeChat) unsubscribeChat();
+  const q = query(
+    collection(db, "messages"),
+    where("at", ">=", todayMidnightMs()),
+    orderBy("at", "asc")
+  );
+  let first = true;
+  unsubscribeChat = onSnapshot(q, (snap) => {
+    chatMessages = snap.docs.map((d) => d.data());
+    if (!first) {
+      snap.docChanges().forEach((change) => {
+        if (change.type !== "added") return;
+        const m = change.doc.data();
+        if (m.sender === myName) return; // don't notify yourself about your own message
+        unreadChat++;
+        updateChatBadge();
+        pushNotification(`💬 ${m.sender}: ${m.text}`, "chat");
+        if (!chatOpen) showChatPopout(m.sender, m.text);
+      });
+    }
+    first = false;
+    if (chatOpen) renderChatMessages();
+  });
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  const sender = myName || (myRole === "admin" ? "Admin" : "Lifeguard");
+  input.value = "";
+  await addDoc(collection(db, "messages"), { sender, text, at: Date.now() });
+}
+
+function renderChatMessages() {
+  const el = document.getElementById("chatMessages");
+  if (!el) return;
+  el.innerHTML = chatMessages.length
+    ? chatMessages.map((m) => `
+        <div class="chat-msg ${m.sender === myName ? "mine" : ""}">
+          <div class="chat-msg-meta"><b>${escapeHtml(m.sender)}</b> · ${clockTimeLabel(m.at)}</div>
+          <div class="chat-msg-text">${escapeHtml(m.text)}</div>
+        </div>
+      `).join("")
+    : `<div class="empty-msg none-needed" style="padding:20px 0;">No messages yet — say hi</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateChatBadge() {
+  const badge = document.getElementById("chatBadge");
+  if (!badge) return;
+  if (unreadChat > 0) { badge.style.display = "flex"; badge.textContent = unreadChat > 9 ? "9+" : unreadChat; }
+  else badge.style.display = "none";
+}
+
+function openChat() {
+  chatOpen = true;
+  unreadChat = 0;
+  updateChatBadge();
+  renderChatMessages();
+  document.getElementById("chatPanel").style.display = "flex";
+  closeNotif();
+  document.getElementById("chatInput").focus();
+}
+function closeChat() {
+  chatOpen = false;
+  document.getElementById("chatPanel").style.display = "none";
+}
+
+function updateFabVisibility() {
+  const show = !!(myRole && (myRole === "admin" ? adminUnlocked : myName));
+  const bell = document.getElementById("notifBell");
+  const chatFab = document.getElementById("chatFab");
+  if (bell) bell.style.display = show ? "flex" : "none";
+  if (chatFab) chatFab.style.display = show ? "flex" : "none";
+}
+
+function wireFloatingUI() {
+  document.getElementById("notifBell").onclick = openNotif;
+  document.getElementById("notifClose").onclick = closeNotif;
+  document.getElementById("chatFab").onclick = openChat;
+  document.getElementById("chatClose").onclick = closeChat;
+  document.getElementById("chatSend").onclick = sendChatMessage;
+  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendChatMessage();
+  });
+}
+
+// ---------------- alerts (shortage + long-shift reminders) ----------------
+let priorShortage = {}; // bayId -> bool, so we only notify on the transition
+let notifiedLongShift = new Set(); // guards already reminded today
+
+function checkAlerts() {
+  if (!dataReady) return;
+  const { bayIntervals, currentStatus } = buildTimelines();
+
+  BAY_IDS.forEach((id) => {
+    const bay = bays[id];
+    if (!bay.open) { priorShortage[id] = false; return; }
+    const count = currentHeadcount(bayIntervals, id);
+    const split = remainingSplit(bay, count);
+    const wasShort = !!priorShortage[id];
+    if (split.shortage && !wasShort) {
+      pushNotification(`Bay ${id} is short-staffed — only ${count} for ${split.activeStandsNow} stands`, "warning");
+    } else if (!split.shortage && wasShort) {
+      pushNotification(`Bay ${id} is back to full coverage`, "info");
+    }
+    priorShortage[id] = split.shortage;
+  });
+
+  const now = Date.now();
+  Object.entries(currentStatus).forEach(([guard, s]) => {
+    if (s.bay && now - s.since >= 3 * 3600000 && !notifiedLongShift.has(guard)) {
+      pushNotification(`${guard} has been on Bay ${s.bay} for 3+ hours — maybe rotate them out`, "reminder");
+      notifiedLongShift.add(guard);
+    }
+  });
+}
+
 // ---------------- history (past days) ----------------
 async function fetchDayEvents(dateStr) {
   const { start, end } = dateStrToRange(dateStr);
@@ -367,6 +637,21 @@ async function loadHistory(dateStr) {
 }
 const root = document.getElementById("root");
 
+function headerHtml(title, sub) {
+  return `
+    <div class="header">
+      <div class="header-badge">🛟</div>
+      <div>
+        <div class="header-title">${escapeHtml(title)}</div>
+        <div class="header-sub">${escapeHtml(sub)}</div>
+      </div>
+    </div>
+    <div class="wave-divider">
+      <svg viewBox="0 0 120 16" preserveAspectRatio="none"><path d="M0,8 C10,14 20,2 30,8 C40,14 50,2 60,8 C70,14 80,2 90,8 C100,14 110,2 120,8 L120,16 L0,16 Z"/></svg>
+    </div>
+  `;
+}
+
 function render() {
   if (!dataReady) {
     root.innerHTML = `<div class="loading">Connecting…</div>`;
@@ -380,21 +665,16 @@ function render() {
     if (!adminUnlocked) renderAdminPinGate();
     else renderAdmin();
   }
+  updateFabVisibility();
 }
 
 function renderRoleGate() {
   root.innerHTML = `
-    <div class="header">
-      <div class="header-badge">🛟</div>
-      <div>
-        <div class="header-title">Bay Board</div>
-        <div class="header-sub">10:00 AM – 6:00 PM</div>
-      </div>
-    </div>
+    ${headerHtml("Bay Board", "10:00 AM – 6:00 PM")}
     <div class="board-overview">${overviewHtml()}</div>
     <div class="role-pick">
-      <button class="role-btn" id="pickLifeguard">I'm a Lifeguard</button>
-      <button class="role-btn secondary" id="pickAdmin">I'm the Admin</button>
+      <button class="role-btn" id="pickLifeguard">🏖️ I'm a Lifeguard</button>
+      <button class="role-btn secondary" id="pickAdmin">🗝️ I'm the Admin</button>
     </div>
   `;
   document.getElementById("pickLifeguard").onclick = () => setRole("lifeguard");
@@ -426,15 +706,9 @@ function overviewHtml() {
 
 function renderAdminPinGate() {
   root.innerHTML = `
-    <div class="header">
-      <div class="header-badge">🛟</div>
-      <div>
-        <div class="header-title">Admin Login</div>
-        <div class="header-sub">Enter PIN</div>
-      </div>
-    </div>
+    ${headerHtml("Admin Login", "Enter PIN")}
     <div class="section">
-      <input type="password" inputmode="numeric" id="pinInput" class="pin-input" placeholder="PIN" />
+      <input type="password" inputmode="numeric" id="pinInput" class="pin-input" placeholder="• • • •" />
       <button class="add-row" id="pinSubmit" style="margin-top:10px;">Unlock</button>
       <div id="pinError" class="pin-error"></div>
     </div>
@@ -450,6 +724,7 @@ function renderAdminPinGate() {
     if (val === ADMIN_PIN) {
       adminUnlocked = true;
       sessionStorage.setItem("bay_adminUnlocked", "1");
+      requestNotifPermission();
       render();
     } else {
       document.getElementById("pinError").textContent = "Wrong PIN";
@@ -460,13 +735,7 @@ function renderAdminPinGate() {
 function renderLifeguard() {
   if (!myName) {
     root.innerHTML = `
-      <div class="header">
-        <div class="header-badge">🛟</div>
-        <div>
-          <div class="header-title">What's your name?</div>
-          <div class="header-sub">10:00 AM – 6:00 PM</div>
-        </div>
-      </div>
+      ${headerHtml("What's your name?", "10:00 AM – 6:00 PM")}
       <div class="section">
         <input type="text" id="nameInput" class="pin-input" placeholder="Your name" />
         <button class="add-row" id="nameSubmit" style="margin-top:10px;">Continue</button>
@@ -540,13 +809,7 @@ function renderLifeguard() {
   }
 
   root.innerHTML = `
-    <div class="header">
-      <div class="header-badge">🛟</div>
-      <div>
-        <div class="header-title">Hey, ${escapeHtml(myName)}</div>
-        <div class="header-sub">10:00 AM – 6:00 PM</div>
-      </div>
-    </div>
+    ${headerHtml(`Hey, ${myName}`, "10:00 AM – 6:00 PM")}
 
     ${statusHtml}
 
@@ -560,7 +823,8 @@ function renderLifeguard() {
   `;
 
   root.querySelectorAll(".bay-tile").forEach((btn) => {
-    btn.onclick = () => checkIn(parseInt(btn.dataset.bay, 10));
+    const bayId = parseInt(btn.dataset.bay, 10);
+    btn.onclick = () => { if (bayId !== my.bay) checkIn(bayId); };
   });
   const coBtn = document.getElementById("checkOutBtn");
   if (coBtn) coBtn.onclick = checkOut;
@@ -570,13 +834,7 @@ function renderLifeguard() {
 
 function renderAdmin() {
   root.innerHTML = `
-    <div class="header">
-      <div class="header-badge">🛟</div>
-      <div>
-        <div class="header-title">Admin Dashboard</div>
-        <div class="header-sub">10:00 AM – 6:00 PM</div>
-      </div>
-    </div>
+    ${headerHtml("Admin Dashboard", "10:00 AM – 6:00 PM")}
     <div class="tab-row">
       <button class="tab-btn ${adminTab === "live" ? "active" : ""}" id="tabLive">Live</button>
       <button class="tab-btn ${adminTab === "history" ? "active" : ""}" id="tabHistory">History</button>
@@ -769,9 +1027,12 @@ function renderAdminHistory() {
 
 // ---------------- boot ----------------
 (async function boot() {
+  wireFloatingUI();
   await seedBaysIfNeeded();
   listenBays();
   listenEvents();
+  listenChat();
   setInterval(render, 30000); // keep elapsed-time displays fresh
   setInterval(checkDayRollover, 30000); // auto-reset the live view at midnight
+  setInterval(checkAlerts, 30000); // shortage + long-shift reminders
 })();
