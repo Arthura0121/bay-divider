@@ -81,3 +81,37 @@ should use.
   you can pick any past date (or tap one of the last 7 days) and see who
   worked which bay, for how long, every bay switch, and a full
   timestamped activity log for that day.
+
+## Notifications
+
+Everyone (lifeguards and admin) gets a notification bell (🔔) once they've
+identified themselves (picked a name, or entered the admin PIN). It fires
+for:
+
+- Someone checking into, moving between, or checking out of a bay
+- A bay opening or closing
+- A position (Chair 1/2, Jetty, Walker) turning on or off
+- A bay dropping below the headcount its open positions need (and a
+  follow-up when it's back to full coverage)
+- A guard who's been on the same bay for 3+ hours straight, as a rotation
+  reminder
+- New chat messages
+
+These show up two ways: as an in-app banner across the top (works
+whenever the site is open, on any device), and — if the browser grants
+permission — as a real OS-level notification when the tab is in the
+background. **Important limitation:** there's no push server behind this,
+so the OS notification only works while the browser is still running
+(tab open or backgrounded). If someone fully closes the browser or the
+site, they won't get anything until they reopen it. True closed-app push
+notifications would need Firebase Cloud Messaging plus a service worker —
+a bigger addition, possible later if it turns out to matter.
+
+## Team chat
+
+Both lifeguards and the admin share one live chat, opened with the 💬
+button. New messages show as a normal notification-bell entry, plus a
+bigger pop-up banner across the top if the chat panel isn't already open
+(tap it to jump straight into the conversation). Like the rest of the
+day's data, chat resets at midnight — it's not meant as a permanent
+message history, just same-day coordination.
