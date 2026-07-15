@@ -676,6 +676,7 @@ function renderRoleGate() {
       <button class="role-btn" id="pickLifeguard">🏖️ I'm a Lifeguard</button>
       <button class="role-btn secondary" id="pickAdmin">🗝️ I'm the Admin</button>
     </div>
+    <a class="link-btn" href="calculator.html">🧮 Just calculate a bay split (no login)</a>
   `;
   document.getElementById("pickLifeguard").onclick = () => setRole("lifeguard");
   document.getElementById("pickAdmin").onclick = () => setRole("admin");
@@ -820,6 +821,7 @@ function renderLifeguard() {
 
     <button class="link-btn" id="switchName">Not ${escapeHtml(myName)}? Switch name</button>
     <button class="link-btn" id="backBtn">← back to role select</button>
+    <a class="link-btn" href="calculator.html">🧮 Just calculate a bay split</a>
   `;
 
   root.querySelectorAll(".bay-tile").forEach((btn) => {
@@ -841,6 +843,7 @@ function renderAdmin() {
     </div>
     <div id="adminContent"></div>
     <button class="link-btn" id="backBtn">← sign out of admin</button>
+    <a class="link-btn" href="calculator.html">🧮 Just calculate a bay split</a>
   `;
   document.getElementById("tabLive").onclick = () => { adminTab = "live"; render(); };
   document.getElementById("tabHistory").onclick = () => {

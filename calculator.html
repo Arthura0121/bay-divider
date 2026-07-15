@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0A1622" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Bay Calculator" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230A1622'/%3E%3Ccircle cx='50' cy='50' r='34' fill='none' stroke='%23F2793A' stroke-width='12'/%3E%3Ccircle cx='50' cy='50' r='34' fill='none' stroke='%233E92CC' stroke-width='12' stroke-dasharray='27 27' stroke-dashoffset='13.5'/%3E%3Ccircle cx='50' cy='50' r='11' fill='%230A1622' stroke='%23F5F8FB' stroke-width='3'/%3E%3C/svg%3E" />
+<title>Bay Time Splitter</title>
+<style>
+  :root {
+    --pine: #0A1622;
+    --panel: #12283F;
+    --panel-border: #28496A;
+    --wood: #0B1C2C;
+    --parchment: #FFFFFF;
+    --parchment-edge: #DCE6EF;
+    --blue: #3E92CC;
+    --orange: #F2793A;
+    --ink: #0F2438;
+    --cream: #F5F8FB;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { overscroll-behavior-y: none; }
+
+  body {
+    margin: 0;
+    background: var(--pine);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: calc(14px + env(safe-area-inset-top)) 14px calc(40px + env(safe-area-inset-bottom));
+  }
+
+  .back-link {
+    display: flex; align-items: center; gap: 6px; background: transparent; border: none;
+    color: var(--blue); opacity: 0.85; font-size: 13px; font-weight: 700; cursor: pointer;
+    padding: 6px 2px; margin-bottom: 10px; text-decoration: none;
+  }
+
+  /* ---- Header ---- */
+  .header {
+    background: var(--wood);
+    border: 3px solid var(--blue);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 6px 0 rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header-badge {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: var(--orange);
+    border: 2px solid var(--blue);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-size: 22px;
+  }
+  .header-title {
+    color: var(--cream);
+    font-size: 23px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    line-height: 1.1;
+  }
+  .header-sub {
+    color: var(--blue);
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 2px;
+  }
+
+  /* ---- Section ---- */
+  .section {
+    margin-top: 16px;
+    background: var(--panel);
+    border: 2px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .section-label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.5px; color: var(--blue); margin-bottom: 10px;
+  }
+
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  .row.dim { opacity: 0.4; }
+
+  .name-label {
+    color: var(--cream); font-size: 14px; font-weight: 700; flex: 1; letter-spacing: 0.2px;
+  }
+
+  select, .static-field {
+    background: #00000026;
+    border: 1px solid #3E92CC55;
+    border-radius: 7px;
+    padding: 9px 8px;
+    color: var(--cream);
+    font-size: 16px; /* keeping this at 16px+ stops iOS Safari auto-zooming when tapped */
+    font-family: inherit;
+  }
+  select:disabled { opacity: 0.5; }
+
+  .from-label {
+    color: var(--blue); opacity: 0.9; font-size: 12px; width: 46px; flex-shrink: 0;
+    font-weight: 700; text-transform: uppercase;
+  }
+
+  /* switch — sized for a comfortable thumb tap, not just visual match */
+  .switch {
+    width: 44px; height: 26px; border-radius: 13px; flex-shrink: 0;
+    border: none; cursor: pointer; position: relative; padding: 0;
+    background: #FFFFFF26; transition: background 0.15s ease;
+  }
+  .switch.on { background: var(--blue); }
+  .switch .knob {
+    position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--cream); transition: left 0.15s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  .switch.on .knob { left: 20px; background: var(--woodDark, #040B12); }
+
+  .icon-btn {
+    background: transparent; border: none; color: var(--orange); opacity: 0.8;
+    cursor: pointer; display: flex; align-items: center; padding: 4px; flex-shrink: 0;
+    font-size: 15px;
+  }
+
+  .add-row {
+    display: flex; align-items: center; gap: 6px; justify-content: center;
+    background: transparent; border: 1.5px dashed #3E92CC88; color: var(--blue);
+    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; width: 100%; margin-top: 4px;
+  }
+
+  .hint {
+    color: var(--cream); opacity: 0.55; font-size: 11px; margin-top: 8px; line-height: 1.5;
+  }
+
+  /* ---- Duty board ---- */
+  .duty-board-label {
+    font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--blue); margin-bottom: 10px; text-align: center;
+  }
+
+  .duty-card {
+    margin-bottom: 16px; border-radius: 16px; overflow: hidden;
+    border: 3px solid var(--blue); box-shadow: 0 8px 0 rgba(0,0,0,0.35);
+  }
+  .duty-banner {
+    background: var(--orange); padding: 10px 16px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .duty-time {
+    color: var(--cream); font-weight: 800; font-size: 16px; letter-spacing: 0.2px;
+  }
+  .duty-people {
+    color: var(--wood); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .duty-body { background: var(--parchment); padding: 18px 16px; }
+
+  .empty-msg { text-align: center; font-size: 14px; padding: 10px 0; }
+  .empty-msg.none-people { color: var(--orange); font-weight: 700; font-size: 15px; }
+  .empty-msg.none-needed { color: var(--ink); opacity: 0.55; }
+
+  .stat-row { display: flex; gap: 10px; justify-content: center; }
+  .stat-block { text-align: center; padding: 0 6px; min-width: 92px; }
+  .stat-count { font-size: 34px; font-weight: 900; color: var(--orange); line-height: 1; }
+  .stat-people-label {
+    font-size: 10.5px; font-weight: 700; color: var(--ink); opacity: 0.6;
+    text-transform: uppercase; letter-spacing: 1px; margin-top: 2px;
+  }
+  .stat-time { font-size: 17px; font-weight: 800; color: var(--ink); margin-top: 6px; }
+  .stat-each { font-size: 10px; color: var(--ink); opacity: 0.5; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-divider { width: 2px; background: var(--parchment-edge); align-self: stretch; flex-shrink: 0; }
+
+  .duty-footer {
+    text-align: center; margin-top: 10px; font-size: 11.5px; color: var(--ink); opacity: 0.55;
+    border-top: 1px dashed var(--parchment-edge); padding-top: 8px;
+  }
+
+  .shortage {
+    display: flex; gap: 7px; align-items: center; margin-top: 10px;
+    background: #F2793A33; border: 1px solid var(--orange); border-radius: 8px; padding: 8px 10px;
+  }
+  .shortage span { font-size: 11.5px; color: var(--ink); font-weight: 600; }
+
+  .day-total {
+    color: var(--cream); opacity: 0.45; font-size: 11.5px; margin-top: 4px; text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <a class="back-link" href="index.html">← Back to Bay Board</a>
+
+    <!-- Header -->
+    <div class="header">
+      <div class="header-badge">🛟</div>
+      <div>
+        <div class="header-title">Bay Time Splitter</div>
+        <div class="header-sub">10:00 AM – 6:00 PM</div>
+      </div>
+    </div>
+
+    <!-- Positions -->
+    <div class="section">
+      <div class="section-label">🌊 Positions</div>
+      <div id="positionsList"></div>
+    </div>
+
+    <!-- People on the bay -->
+    <div class="section">
+      <div class="section-label">👥 People on the bay</div>
+      <div id="changesList"></div>
+      <button class="add-row" onclick="addChange()">➕ Someone leaves / joins</button>
+    </div>
+
+    <!-- Duty board -->
+    <div style="margin-top: 22px;">
+      <div class="duty-board-label">Duty Board</div>
+      <div id="resultsList"></div>
+      <div class="day-total" id="dayTotal"></div>
+    </div>
+  </div>
+
+<script>
+  // ---------- constants ----------
+  const DAY_HOURS = 8; // 10am - 6pm
+  const DAY_START_CLOCK = "10:00";
+
+  const TIME_OPTIONS = Array.from({ length: (DAY_HOURS - 1) * 2 }, (_, i) => 0.5 + i * 0.5);
+  const PEOPLE_OPTIONS = Array.from({ length: 20 }, (_, i) => i + 1);
+  const HOUR_OPTIONS = Array.from({ length: DAY_HOURS * 2 + 1 }, (_, i) => i * 0.5);
+
+  let uid = 1;
+  const nextId = () => uid++;
+
+  // ---------- state ----------
+  let positions = [
+    { id: "chair1", name: "Chair 1", hours: 8, on: true },
+    { id: "chair2", name: "Chair 2", hours: 8, on: true },
+    { id: "jetty", name: "Jetty", hours: 8, on: true },
+    { id: "walker", name: "Walker", hours: 7, on: true },
+  ];
+
+  let changes = [{ id: nextId(), start: 0, people: 5 }];
+
+  // ---------- helpers ----------
+  function fmtHours(h) {
+    const totalMin = Math.round(h * 60);
+    const hh = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    if (hh === 0) return `${mm}m`;
+    if (mm === 0) return `${hh}h`;
+    return `${hh}h ${mm}m`;
+  }
+
+  function clockLabel(hoursFromStart) {
+    const [sh, sm] = DAY_START_CLOCK.split(":").map(Number);
+    const totalMin = sh * 60 + sm + Math.round(hoursFromStart * 60);
+    const wrapped = ((totalMin % (24 * 60)) + 24 * 60) % (24 * 60);
+    let hh = Math.floor(wrapped / 60);
+    const mm = wrapped % 60;
+    const ap = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12;
+    if (hh === 0) hh = 12;
+    return `${hh}:${mm.toString().padStart(2, "0")} ${ap}`;
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  // ---------- mutations ----------
+  function togglePosition(id) {
+    const p = positions.find((p) => p.id === id);
+    p.on = !p.on;
+    renderAll();
+  }
+  function setPositionHours(id, hours) {
+    const p = positions.find((p) => p.id === id);
+    p.hours = parseFloat(hours);
+    renderAll();
+  }
+
+  function setChangeStart(id, start) {
+    id = Number(id);
+    const c = changes.find((c) => c.id === id);
+    c.start = parseFloat(start);
+    renderAll();
+  }
+  function setChangePeople(id, people) {
+    id = Number(id);
+    const c = changes.find((c) => c.id === id);
+    c.people = parseInt(people, 10);
+    renderAll();
+  }
+  function removeChange(id) {
+    id = Number(id);
+    if (changes.length > 1) changes = changes.filter((c) => c.id !== id);
+    renderAll();
+  }
+  function addChange() {
+    const usedStarts = new Set(changes.map((c) => c.start));
+    const free = TIME_OPTIONS.find((t) => !usedStarts.has(t));
+    if (free === undefined) return;
+    const last = changes[changes.length - 1];
+    changes.push({ id: nextId(), start: free, people: last ? last.people : 5 });
+    renderAll();
+  }
+
+  // ---------- computation ----------
+  function computeSegments() {
+    const sorted = [...changes].sort((a, b) => a.start - b.start);
+    return sorted.map((c, i) => {
+      const start = c.start;
+      const end = sorted[i + 1] ? sorted[i + 1].start : DAY_HOURS;
+      const people = Math.max(0, c.people);
+      const onPositions = positions.filter((p) => p.on);
+
+      let neededMin = 0;
+      onPositions.forEach((p) => {
+        const overlap = Math.min(end, p.hours) - start;
+        if (overlap > 0) neededMin += overlap * 60;
+      });
+
+      const activeStandCount = onPositions.filter((p) => p.hours > start).length;
+      const shortage = people > 0 && people < activeStandCount;
+
+      let breakdown = null;
+      if (people > 0 && neededMin > 0) {
+        const totalBlocks = Math.round(neededMin / 30);
+        const baseBlocks = Math.floor(totalBlocks / people);
+        const extra = totalBlocks - baseBlocks * people;
+        breakdown = {
+          groupA: { count: people - extra, minutes: baseBlocks * 30 },
+          groupB: extra > 0 ? { count: extra, minutes: (baseBlocks + 1) * 30 } : null,
+        };
+      }
+
+      return { id: c.id, start, end, people, neededMin, shortage, activeStandCount, breakdown };
+    });
+  }
+
+  // ---------- render ----------
+  function renderPositions() {
+    const el = document.getElementById("positionsList");
+    el.innerHTML = positions.map((p) => `
+      <div class="row ${p.on ? "" : "dim"}">
+        <button class="switch ${p.on ? "on" : ""}" onclick="togglePosition('${p.id}')">
+          <span class="knob"></span>
+        </button>
+        <span class="name-label">${escapeHtml(p.name)}</span>
+        <select ${p.on ? "" : "disabled"} onchange="setPositionHours('${p.id}', this.value)" style="width:84px;">
+          ${HOUR_OPTIONS.map((h) => `<option value="${h}" ${h === p.hours ? "selected" : ""}>${fmtHours(h)}</option>`).join("")}
+        </select>
+      </div>
+    `).join("");
+  }
+
+  function renderChanges() {
+    const el = document.getElementById("changesList");
+    const sorted = [...changes].sort((a, b) => a.start - b.start);
+    const usedStarts = new Set(changes.map((c) => c.start));
+
+    el.innerHTML = sorted.map((c, i) => {
+      const startField = i === 0
+        ? `<span class="static-field" style="flex:1; opacity:0.85;">${DAY_START_CLOCK} AM</span>`
+        : `<select onchange="setChangeStart('${c.id}', this.value)" style="flex:1;">
+            ${TIME_OPTIONS.filter((t) => t === c.start || !usedStarts.has(t))
+              .map((t) => `<option value="${t}" ${t === c.start ? "selected" : ""}>${clockLabel(t)}</option>`).join("")}
+          </select>`;
+
+      const removeBtn = i !== 0
+        ? `<button class="icon-btn" onclick="removeChange('${c.id}')">🗑️</button>`
+        : "";
+
+      return `
+        <div class="row">
+          <span class="from-label">${i === 0 ? "Starts" : "From"}</span>
+          ${startField}
+          <select onchange="setChangePeople('${c.id}', this.value)" style="width:58px; text-align:center;">
+            ${PEOPLE_OPTIONS.map((n) => `<option value="${n}" ${n === c.people ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+          ${removeBtn}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderResults() {
+    const segments = computeSegments();
+    const el = document.getElementById("resultsList");
+
+    el.innerHTML = segments.map((s) => {
+      let bodyInner;
+      if (s.people === 0) {
+        bodyInner = `<div class="empty-msg none-people">No one on the bay this window</div>`;
+      } else if (s.neededMin === 0) {
+        bodyInner = `<div class="empty-msg none-needed">No positions need coverage</div>`;
+      } else {
+        const blockHtml = (b) => `
+          <div class="stat-block">
+            <div class="stat-count">${b.count}</div>
+            <div class="stat-people-label">${b.count === 1 ? "person" : "people"}</div>
+            <div class="stat-time">${fmtHours(b.minutes / 60)}</div>
+            <div class="stat-each">each</div>
+          </div>
+        `;
+        bodyInner = `
+          <div class="stat-row">
+            ${blockHtml(s.breakdown.groupA)}
+            ${s.breakdown.groupB ? `<div class="stat-divider"></div>${blockHtml(s.breakdown.groupB)}` : ""}
+          </div>
+        `;
+      }
+
+      const shortageHtml = s.shortage ? `
+        <div class="shortage">
+          <span>⚠️</span>
+          <span>Only ${s.people} for ${s.activeStandCount} stands running at once — one won't be covered the whole time.</span>
+        </div>
+      ` : "";
+
+      return `
+        <div class="duty-card">
+          <div class="duty-banner">
+            <span class="duty-time">${clockLabel(s.start)} – ${clockLabel(s.end)}</span>
+            <span class="duty-people">${s.people} on bay</span>
+          </div>
+          <div class="duty-body">
+            ${bodyInner}
+            <div class="duty-footer">${fmtHours(s.neededMin / 60)} of stand time to cover this window</div>
+            ${shortageHtml}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    const dayTotalNeeded = positions.filter((p) => p.on).reduce((sum, p) => sum + Math.min(p.hours, DAY_HOURS) * 60, 0);
+    document.getElementById("dayTotal").textContent = `${fmtHours(dayTotalNeeded / 60)} of stand coverage needed across the full day`;
+  }
+
+  function renderAll() {
+    renderPositions();
+    renderChanges();
+    renderResults();
+  }
+
+  renderAll();
+</script>
+</body>
+</html>

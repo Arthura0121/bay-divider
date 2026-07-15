@@ -60,7 +60,8 @@ should use.
 
 ## 4. Deploy to GitHub Pages
 
-1. Create a new GitHub repo, upload all 3 files to the root.
+1. Create a new GitHub repo, upload all 5 files to the root (`index.html`,
+   `app.js`, `firebase-config.js`, `calculator.html`, `README.md`).
 2. Repo **Settings → Pages** → set source to your main branch, root folder.
 3. GitHub gives you a live URL after a minute or two.
 
@@ -106,6 +107,14 @@ so the OS notification only works while the browser is still running
 site, they won't get anything until they reopen it. True closed-app push
 notifications would need Firebase Cloud Messaging plus a service worker —
 a bigger addition, possible later if it turns out to matter.
+
+## Just want the calculator?
+
+If someone just wants to work out a time split without checking into the
+live system — no name, no PIN — there's a link on the landing screen (and
+inside both the lifeguard and admin views) to `calculator.html`. It's the
+same 4-position, 10am–6pm splitter, but standalone: nothing it does talks
+to Firebase or affects the live bay data.
 
 ## Team chat
 
