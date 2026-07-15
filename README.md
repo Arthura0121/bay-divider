@@ -74,4 +74,10 @@ should use.
   individual positions (Chair 1/2, Jetty, Walker) on and off, see who's
   where and for how long, and manually move a guard if they forget their
   phone.
-- The day resets at 10:00 AM local time each day (matching the shift).
+- The day resets at 10:00 AM local time each day (matching the shift) for
+  the "hours worked" math, but the live roster itself clears at midnight —
+  nothing carries over into the next day's view.
+- Nothing is ever deleted. The admin dashboard has a **History** tab where
+  you can pick any past date (or tap one of the last 7 days) and see who
+  worked which bay, for how long, every bay switch, and a full
+  timestamped activity log for that day.
